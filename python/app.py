@@ -99,15 +99,31 @@ ONGELDIG = {
     "temperatuur": {"waarde": (-999, 85.0)},
     "luchtvochtigheid": {"waarde": (-5, 140)},
     "wind": {"snelheid": (-10, 999), "richting": (-1, 400)},
-    "regen": {"mm_per_uur": (-3, 500)},
+    "regen": {"mm_per_uur": (-3, 999)},
+}
+
+
+# Per topic: welk veld een onrealistische sprong kan maken en hoe groot die sprong is.
+# De waarde blijft binnen het geldige bereik; enkel een spike-filter kan dit herkennen.
+SPRONG = {
+    "temperatuur": ("waarde", 12),
+    "luchtvochtigheid": ("waarde", 40),
+    "wind": ("snelheid", 50),
+    "regen": ("mm_per_uur", 20),
 }
 
 
 def maak_fout(meting, soort_topic):
     """Vervalst een geldige meting op een willekeurige manier."""
     veld = random.choice(list(ONGELDIG[soort_topic]))
-    soort = random.choice(("buiten_bereik", "verkeerd_type", "ontbrekend"))
-    if soort == "buiten_bereik":
+    soort = random.choice(("buiten_bereik", "verkeerd_type", "ontbrekend", "sprong"))
+    if soort == "sprong":
+        veld, delta = SPRONG[soort_topic]
+        waarde = meting[veld]
+        if soort_topic == "luchtvochtigheid" and waarde > 50:
+            delta = -delta  # blijf binnen 0..100 %
+        meting[veld] = round(waarde + delta, 1)
+    elif soort == "buiten_bereik":
         meting[veld] = random.choice(ONGELDIG[soort_topic][veld])
     elif soort == "verkeerd_type":
         meting[veld] = random.choice(("abc", None, "NaN"))

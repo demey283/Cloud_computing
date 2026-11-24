@@ -2,9 +2,9 @@
     {
         "id": "219341f41a30297e",
         "type": "tab",
-        "label": "Flow 1",
+        "label": "Weerstation",
         "disabled": false,
-        "info": "",
+        "info": "Verwerkt de MQTT-metingen van het weerstation: validatie + spike-filter, foutafhandeling, afgeleide waarden, alarmen en omzetting naar InfluxDB-formaat.",
         "env": []
     },
     {
@@ -39,6 +39,16 @@
         "sessionExpiry": ""
     },
     {
+        "id": "c_uitleg",
+        "type": "comment",
+        "z": "219341f41a30297e",
+        "name": "Weerstation: validatie, fouten, afgeleide waarden, alarmen",
+        "info": "Foute metingen gaan naar weer/fouten en naar measurement 'fouten'.\nGeldige metingen krijgen afgeleide waarden, worden gecontroleerd op alarmen\nen omgezet naar InfluxDB-formaat. Vervang de debug-nodes 'naar InfluxDB'\ndoor een 'influxdb batch'-node zodra InfluxDB in de stack zit.",
+        "x": 260,
+        "y": 40,
+        "wires": []
+    },
+    {
         "id": "4065582e1fe6148d",
         "type": "mqtt in",
         "z": "219341f41a30297e",
@@ -51,12 +61,68 @@
         "rap": true,
         "rh": 0,
         "inputs": 0,
-        "x": 270,
-        "y": 240,
+        "x": 130,
+        "y": 140,
         "wires": [
+            [
+                "w_switch"
+            ]
+        ]
+    },
+    {
+        "id": "w_switch",
+        "type": "switch",
+        "z": "219341f41a30297e",
+        "name": "Soort bericht",
+        "property": "topic",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "weer/status",
+                "vt": "str"
+            },
+            {
+                "t": "regex",
+                "v": "^weer/(fouten|alarm)$",
+                "vt": "str",
+                "case": false
+            },
+            {
+                "t": "else"
+            }
+        ],
+        "checkall": "false",
+        "repair": false,
+        "outputs": 3,
+        "x": 330,
+        "y": 140,
+        "wires": [
+            [
+                "w_status"
+            ],
+            [],
             [
                 "validateweer"
             ]
+        ]
+    },
+    {
+        "id": "w_status",
+        "type": "function",
+        "z": "219341f41a30297e",
+        "name": "Stationstatus",
+        "func": "// Toont of het weerstation online is (retained bericht + Last Will van de generator).\nconst online = msg.payload === \"online\";\nconst tijd = new Date().toLocaleTimeString(\"nl-BE\");\nnode.status({ fill: online ? \"green\" : \"red\", shape: online ? \"dot\" : \"ring\",\n              text: `station ${msg.payload} (sinds ${tijd})` });\nflow.set(\"station_online\", online);\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 540,
+        "y": 80,
+        "wires": [
+            []
         ]
     },
     {
@@ -64,26 +130,92 @@
         "type": "function",
         "z": "219341f41a30297e",
         "name": "Valideer weer meting",
-        "func": "function isGetal(waarde) {\n    return typeof waarde === \"number\" && Number.isFinite(waarde);\n}\n\nconst data = msg.payload;\nconst topic = msg.topic;\n\nif (!data || typeof data !== \"object\" || !data.station || !data.ts) {\n    node.warn(\"Meting heeft ontbrekende velden: \" + topic);\n    return null;\n}\n\nlet geldig = false;\n\nswitch (topic) {\n    case \"weer/temperatuur\":\n        geldig = isGetal(data.waarde) && data.waarde >= -50 && data.waarde <= 60;\n        break;\n    case \"weer/luchtvochtigheid\":\n        geldig = isGetal(data.waarde) && data.waarde >= 0 && data.waarde <= 100;\n        break;\n    case \"weer/wind\":\n        geldig = isGetal(data.snelheid) && data.snelheid >= 0 && data.snelheid <= 200 &&\n            isGetal(data.richting) && data.richting >= 0 && data.richting <= 360;\n        break;\n    case \"weer/regen\":\n        geldig = isGetal(data.mm_per_uur) && data.mm_per_uur >= 0 && data.mm_per_uur <= 500;\n        break;\n    default:\n        return null;\n}\n\nif (!geldig) {\n    node.warn(\"Ongeldige meting afgewezen: \" + topic);\n    return null;\n}\n\nmsg.topic = topic;\nreturn msg;",
+        "func": "// Valideert elke weermeting.\n// Uitgang 1: geldige meting  -> verdere verwerking\n// Uitgang 2: afgewezen meting met reden -> weer/fouten + InfluxDB\nconst REGELS = {\n    \"weer/temperatuur\":      { waarde:     { min: -50, max: 60,  sprong: 3 } },\n    \"weer/luchtvochtigheid\": { waarde:     { min: 0,   max: 100, sprong: 15 } },\n    \"weer/wind\":             { snelheid:   { min: 0,   max: 200, sprong: 45 },\n                               richting:   { min: 0,   max: 360 } },\n    \"weer/regen\":            { mm_per_uur: { min: 0,   max: 500, sprong: 8 } }\n};\nconst SPRONG_MAX_LEEFTIJD_MS = 60000; // vorige waarde ouder dan 60 s: geen sprongcontrole\nconst SPRONG_ACCEPTEER_NA = 3;        // 3 sprongen op rij = echte verandering, dan aanvaarden\n\nconst regels = REGELS[msg.topic];\nif (!regels) return null; // onbekend topic: negeren\n\nconst stats = context.get(\"stats\") || { ok: 0, fout: 0 };\n\nfunction toonStatus() {\n    const totaal = stats.ok + stats.fout;\n    const pct = totaal ? (100 * stats.fout / totaal).toFixed(1) : \"0.0\";\n    node.status({ fill: stats.fout ? \"yellow\" : \"green\", shape: \"dot\",\n                  text: `ok ${stats.ok} | fout ${stats.fout} (${pct}%)` });\n}\n\nfunction afwijzen(reden, veld, waarde, extra) {\n    stats.fout++;\n    context.set(\"stats\", stats);\n    toonStatus();\n    const d = (msg.payload && typeof msg.payload === \"object\") ? msg.payload : {};\n    return [null, {\n        topic: \"weer/fouten\",\n        payload: {\n            bron_topic: msg.topic,\n            station: d.station || \"onbekend\",\n            reden: reden,\n            veld: veld,\n            waarde: waarde === undefined ? null : waarde,\n            ...extra,\n            origineel: msg.payload,\n            ts: d.ts || new Date().toISOString()\n        }\n    }];\n}\n\nconst data = msg.payload;\nif (!data || typeof data !== \"object\" || Array.isArray(data)) {\n    return afwijzen(\"geen JSON-object\", null, data);\n}\nif (!data.station) return afwijzen(\"ontbrekend veld\", \"station\");\nif (!data.ts) return afwijzen(\"ontbrekend veld\", \"ts\");\nif (isNaN(Date.parse(data.ts))) return afwijzen(\"ongeldige tijd\", \"ts\", data.ts);\n\n// 1) Bestaat elk veld, is het een getal en ligt het binnen het bereik?\nfor (const [veld, r] of Object.entries(regels)) {\n    const w = data[veld];\n    if (!(veld in data)) return afwijzen(\"ontbrekend veld\", veld);\n    if (typeof w !== \"number\" || !Number.isFinite(w)) return afwijzen(\"verkeerd type\", veld, w);\n    if (w < r.min || w > r.max) return afwijzen(\"buiten bereik\", veld, w, { min: r.min, max: r.max });\n}\n\n// 2) Spike-filter: wijkt de waarde onrealistisch veel af van de mediaan van de laatste\n//    5 geldige metingen? (mediaan i.p.v. vorige waarde: een losse windstoot verstoort hem niet)\nconst vorige = context.get(\"vorige\") || {};\nconst nu = Date.now();\nfunction mediaan(lijst) {\n    const s = [...lijst].sort((a, b) => a - b);\n    const m = Math.floor(s.length / 2);\n    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;\n}\nfor (const [veld, r] of Object.entries(regels)) {\n    if (!r.sprong) continue;\n    const v = vorige[msg.topic + \".\" + veld];\n    if (!v || nu - v.tijd > SPRONG_MAX_LEEFTIJD_MS) continue;\n    const ref = Math.round(mediaan(v.waarden) * 10) / 10;\n    if (Math.abs(data[veld] - ref) > r.sprong) {\n        v.sprongen = (v.sprongen || 0) + 1;\n        if (v.sprongen < SPRONG_ACCEPTEER_NA) {\n            context.set(\"vorige\", vorige);\n            return afwijzen(\"sprong\", veld, data[veld], { referentie: ref, max_verschil: r.sprong });\n        }\n        v.waarden = []; // echte, blijvende verandering: referentie opnieuw opbouwen\n    }\n}\n\n// Geldig: onthoud deze waarden (max. 5) als referentie voor de volgende metingen.\nfor (const veld of Object.keys(regels)) {\n    const sleutel = msg.topic + \".\" + veld;\n    const v = vorige[sleutel] && nu - vorige[sleutel].tijd <= SPRONG_MAX_LEEFTIJD_MS\n        ? vorige[sleutel] : { waarden: [] };\n    v.waarden = [...v.waarden, data[veld]].slice(-5);\n    v.tijd = nu;\n    v.sprongen = 0;\n    vorige[sleutel] = v;\n}\ncontext.set(\"vorige\", vorige);\nstats.ok++;\ncontext.set(\"stats\", stats);\ntoonStatus();\nreturn [msg, null];\n",
+        "outputs": 2,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 560,
+        "y": 160,
+        "wires": [
+            [
+                "w_afgeleid"
+            ],
+            [
+                "w_mqtt_fout",
+                "w_influx_fout",
+                "w_dbg_fout"
+            ]
+        ]
+    },
+    {
+        "id": "w_afgeleid",
+        "type": "function",
+        "z": "219341f41a30297e",
+        "name": "Afgeleide waarden",
+        "func": "// Berekent afgeleide waarden en zet ze in msg.payload.afgeleid.\n// Gebruikt de laatste geldige temperatuur, vochtigheid en wind (in flow-context).\nconst laatste = flow.get(\"laatste\") || {};\nconst d = msg.payload;\n\nswitch (msg.topic) {\n    case \"weer/temperatuur\":      laatste.temp = d.waarde; break;\n    case \"weer/luchtvochtigheid\": laatste.vocht = d.waarde; break;\n    case \"weer/wind\":             laatste.wind = d.snelheid; break;\n}\nflow.set(\"laatste\", laatste);\n\nconst r1 = x => Math.round(x * 10) / 10;\n\n// Dauwpunt via de Magnus-formule\nfunction dauwpunt(t, rh) {\n    const a = 17.62, b = 243.12;\n    const g = Math.log(rh / 100) + (a * t) / (b + t);\n    return (b * g) / (a - g);\n}\n// Gevoelstemperatuur (windchill, JAG/TI-formule), enkel geldig bij <= 10 °C en wind > 4,8 km/h\nfunction gevoelstemperatuur(t, v) {\n    if (t > 10 || v <= 4.8) return t;\n    return 13.12 + 0.6215 * t - 11.37 * Math.pow(v, 0.16) + 0.3965 * t * Math.pow(v, 0.16);\n}\nfunction kompas(graden) {\n    const r = [\"N\", \"NO\", \"O\", \"ZO\", \"Z\", \"ZW\", \"W\", \"NW\"];\n    return r[Math.round(graden / 45) % 8];\n}\nconst BEAUFORT_GRENZEN = [1, 6, 12, 20, 29, 39, 50, 62, 75, 89, 103, 118]; // km/h\nconst BEAUFORT_NAAM = [\"windstil\", \"zwak\", \"zwak\", \"matig\", \"matig\", \"vrij krachtig\", \"krachtig\",\n                       \"hard\", \"stormachtig\", \"storm\", \"zware storm\", \"zeer zware storm\", \"orkaan\"];\nfunction beaufort(kmh) {\n    let b = 0;\n    while (b < BEAUFORT_GRENZEN.length && kmh >= BEAUFORT_GRENZEN[b]) b++;\n    return b;\n}\nfunction regenIntensiteit(mm) {\n    if (mm === 0) return \"droog\";\n    if (mm < 2.5) return \"licht\";\n    if (mm < 7.6) return \"matig\";\n    return \"zwaar\";\n}\n\nconst afgeleid = {};\nswitch (msg.topic) {\n    case \"weer/temperatuur\":\n        if (laatste.wind !== undefined) afgeleid.gevoelstemperatuur = r1(gevoelstemperatuur(d.waarde, laatste.wind));\n        if (laatste.vocht !== undefined) afgeleid.dauwpunt = r1(dauwpunt(d.waarde, laatste.vocht));\n        break;\n    case \"weer/luchtvochtigheid\":\n        if (laatste.temp !== undefined) afgeleid.dauwpunt = r1(dauwpunt(laatste.temp, d.waarde));\n        break;\n    case \"weer/wind\": {\n        const bft = beaufort(d.snelheid);\n        afgeleid.snelheid_ms = r1(d.snelheid / 3.6);\n        afgeleid.windrichting = kompas(d.richting);\n        afgeleid.beaufort = bft;\n        afgeleid.beaufort_omschrijving = BEAUFORT_NAAM[bft];\n        break;\n    }\n    case \"weer/regen\":\n        afgeleid.intensiteit = regenIntensiteit(d.mm_per_uur);\n        break;\n}\nd.afgeleid = afgeleid;\nreturn msg;\n",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 440,
-        "y": 240,
+        "x": 800,
+        "y": 120,
         "wires": [
             [
-                "149ca0e904822bd0"
+                "w_alarm",
+                "w_influx_ok",
+                "w_dbg_ok"
             ]
         ]
     },
     {
-        "id": "149ca0e904822bd0",
+        "id": "w_alarm",
+        "type": "function",
+        "z": "219341f41a30297e",
+        "name": "Alarmen",
+        "func": "// Stuurt een alarm op weer/alarm bij het begin (\"actief\") en einde (\"voorbij\") van\n// storm, vorst of hevige regen. Hysterese voorkomt dat een alarm blijft aan/uit flikkeren.\nconst ALARMEN = [\n    { type: \"storm\",        topic: \"weer/wind\",        veld: \"snelheid\",\n      drempel: 60,  eenheid: \"km/h\", aan: v => v > 60,  uit: v => v < 55 },\n    { type: \"vorst\",        topic: \"weer/temperatuur\", veld: \"waarde\",\n      drempel: 0,   eenheid: \"°C\",   aan: v => v < 0,   uit: v => v >= 0.5 },\n    { type: \"hevige regen\", topic: \"weer/regen\",       veld: \"mm_per_uur\",\n      drempel: 7.6, eenheid: \"mm/u\", aan: v => v > 7.6, uit: v => v < 6 }\n];\n\nconst actief = context.get(\"actief\") || {};\nconst uit = [];\nfor (const a of ALARMEN) {\n    if (a.topic !== msg.topic) continue;\n    const w = msg.payload[a.veld];\n    let status = null;\n    if (!actief[a.type] && a.aan(w)) { actief[a.type] = true; status = \"actief\"; }\n    else if (actief[a.type] && a.uit(w)) { actief[a.type] = false; status = \"voorbij\"; }\n    if (status) {\n        uit.push({ topic: \"weer/alarm\", payload: {\n            type: a.type, status: status, waarde: w, drempel: a.drempel, eenheid: a.eenheid,\n            station: msg.payload.station, ts: msg.payload.ts } });\n    }\n}\ncontext.set(\"actief\", actief);\n\nconst lijst = Object.keys(actief).filter(k => actief[k]);\nnode.status(lijst.length\n    ? { fill: \"red\", shape: \"dot\", text: \"actief: \" + lijst.join(\", \") }\n    : { fill: \"green\", shape: \"ring\", text: \"geen alarmen\" });\nreturn [uit];\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1020,
+        "y": 80,
+        "wires": [
+            [
+                "w_mqtt_alarm",
+                "w_dbg_alarm"
+            ]
+        ]
+    },
+    {
+        "id": "w_mqtt_alarm",
+        "type": "mqtt out",
+        "z": "219341f41a30297e",
+        "name": "publiceer weer/alarm",
+        "topic": "",
+        "qos": "0",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "5c080e20414911d2",
+        "x": 1250,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "w_dbg_alarm",
         "type": "debug",
         "z": "219341f41a30297e",
-        "name": "debug 1",
+        "name": "alarmen",
         "active": true,
         "tosidebar": true,
         "console": false,
@@ -92,8 +224,134 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 440,
-        "y": 240,
+        "x": 1220,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "w_dbg_ok",
+        "type": "debug",
+        "z": "219341f41a30297e",
+        "name": "geldige meting + afgeleid",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1060,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "w_influx_ok",
+        "type": "function",
+        "z": "219341f41a30297e",
+        "name": "Naar InfluxDB-formaat",
+        "func": "// Zet een geldige meting om naar het formaat van de \"influxdb batch\"-node\n// (node-red-contrib-influxdb): measurement + tags + fields + timestamp.\nconst d = msg.payload;\nconst fields = {};\nfor (const [k, v] of Object.entries(d)) {\n    if (typeof v === \"number\") fields[k] = v;\n}\nfor (const [k, v] of Object.entries(d.afgeleid || {})) {\n    if (typeof v === \"number\" || typeof v === \"string\") fields[k] = v;\n}\nconst tags = { station: d.station };\nif (d.eenheid) tags.eenheid = d.eenheid;\n\nmsg.payload = [{\n    measurement: msg.topic.split(\"/\")[1],   // temperatuur, luchtvochtigheid, wind, regen\n    tags: tags,\n    fields: fields,\n    timestamp: new Date(d.ts)\n}];\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1050,
+        "y": 200,
+        "wires": [
+            [
+                "w_dbg_influx_ok"
+            ]
+        ]
+    },
+    {
+        "id": "w_dbg_influx_ok",
+        "type": "debug",
+        "z": "219341f41a30297e",
+        "name": "naar InfluxDB (metingen)",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1300,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "w_mqtt_fout",
+        "type": "mqtt out",
+        "z": "219341f41a30297e",
+        "name": "publiceer weer/fouten",
+        "topic": "",
+        "qos": "0",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "5c080e20414911d2",
+        "x": 820,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "w_dbg_fout",
+        "type": "debug",
+        "z": "219341f41a30297e",
+        "name": "afgewezen metingen",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 810,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "w_influx_fout",
+        "type": "function",
+        "z": "219341f41a30297e",
+        "name": "Fout naar InfluxDB-formaat",
+        "func": "// Zet een afgewezen meting om naar measurement \"fouten\" voor InfluxDB.\n// Zo kan je in het dashboard het aantal fouten per sensor en per reden tonen.\nconst f = msg.payload;\nconst tijd = isNaN(Date.parse(f.ts)) ? new Date() : new Date(f.ts);\nmsg.payload = [{\n    measurement: \"fouten\",\n    tags: { station: f.station, sensor: f.bron_topic.split(\"/\")[1], reden: f.reden },\n    fields: { aantal: 1, veld: f.veld || \"\", waarde: JSON.stringify(f.waarde) },\n    timestamp: tijd\n}];\n\n// Tellers per reden, zichtbaar onder de node\nconst tel = context.get(\"tel\") || {};\ntel[f.reden] = (tel[f.reden] || 0) + 1;\ncontext.set(\"tel\", tel);\nnode.status({ fill: \"yellow\", shape: \"ring\",\n              text: Object.entries(tel).map(([r, n]) => `${r}: ${n}`).join(\" | \") });\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 840,
+        "y": 340,
+        "wires": [
+            [
+                "w_dbg_influx_fout"
+            ]
+        ]
+    },
+    {
+        "id": "w_dbg_influx_fout",
+        "type": "debug",
+        "z": "219341f41a30297e",
+        "name": "naar InfluxDB (fouten)",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 340,
         "wires": []
     }
 ]

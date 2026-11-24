@@ -1,6 +1,8 @@
 pwfile
 __pycache__/
 mosquitto.db
+mqtt5/data/
+mqtt5/log/
 
 # Node-RED runtime data
 node-red/node_modules/
