@@ -33,8 +33,8 @@ services:
       - MQTT_TOPIC_PREFIX=weer
       - STATION_ID=kortrijk-01
       - STATION_TZ=Europe/Brussels
-      - INTERVAL=5
-      - FOUT_KANS=0.05
+      - INTERVAL=2
+      - FOUT_KANS=0.15
     depends_on:
       - mqtt5
     restart: unless-stopped
