@@ -11,13 +11,17 @@ services:
       - ./mqtt5/log:/mosquitto/log:rw
     restart: unless-stopped
 
-  python-app:
+  weerstation:
     build: ./python
-    container_name: python-app
+    container_name: weerstation
     environment:
       - MQTT_HOST=mqtt5
       - MQTT_PORT=1883
-      - MQTT_TOPIC=project/test
+      - MQTT_TOPIC_PREFIX=weer
+      - STATION_ID=kortrijk-01
+      - STATION_TZ=Europe/Brussels
+      - INTERVAL=5
+      - FOUT_KANS=0.05
     depends_on:
       - mqtt5
     restart: unless-stopped
