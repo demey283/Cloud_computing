@@ -11,6 +11,19 @@ services:
       - ./mqtt5/log:/mosquitto/log:rw
     restart: unless-stopped
 
+  node-red:
+    image: nodered/node-red:latest
+    container_name: node-red
+    ports:
+      - "1880:1880"
+    volumes:
+      - ./node-red:/data
+    environment:
+      - TZ=Europe/Brussels
+    depends_on:
+      - mqtt5
+    restart: unless-stopped
+
   weerstation:
     build: ./python
     container_name: weerstation
