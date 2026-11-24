@@ -11,3 +11,6 @@ node-red/lib/
 node-red/.config.*
 node-red/.sessions.json
 node-red/flows_cred.json
+
+# Geheimen (wachtwoorden, tokens)
+.env

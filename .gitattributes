@@ -1,0 +1,2 @@
+# Shell-scripts moeten LF-regeleinden houden, anders faalt bash in de container
+*.sh text eol=lf

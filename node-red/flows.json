@@ -4,7 +4,7 @@
         "type": "tab",
         "label": "Weerstation",
         "disabled": false,
-        "info": "Verwerkt de MQTT-metingen van het weerstation: validatie + spike-filter, foutafhandeling, afgeleide waarden, alarmen en omzetting naar InfluxDB-formaat.",
+        "info": "Verwerkt de MQTT-metingen van het weerstation: validatie + spike-filter, foutafhandeling, afgeleide waarden, alarmen en opslag in InfluxDB.",
         "env": []
     },
     {
@@ -43,7 +43,7 @@
         "type": "comment",
         "z": "219341f41a30297e",
         "name": "Weerstation: validatie, fouten, afgeleide waarden, alarmen",
-        "info": "Foute metingen gaan naar weer/fouten en naar measurement 'fouten'.\nGeldige metingen krijgen afgeleide waarden, worden gecontroleerd op alarmen\nen omgezet naar InfluxDB-formaat. Vervang de debug-nodes 'naar InfluxDB'\ndoor een 'influxdb batch'-node zodra InfluxDB in de stack zit.",
+        "info": "Foute metingen gaan naar weer/fouten en naar measurement 'fouten'.\nGeldige metingen krijgen afgeleide waarden, worden gecontroleerd op alarmen\nen via de HTTP-API naar InfluxDB geschreven (line protocol).\nURL, org, bucket en token komen uit omgevingsvariabelen (.env).",
         "x": 260,
         "y": 40,
         "wires": []
@@ -249,8 +249,8 @@
         "id": "w_influx_ok",
         "type": "function",
         "z": "219341f41a30297e",
-        "name": "Naar InfluxDB-formaat",
-        "func": "// Zet een geldige meting om naar het formaat van de \"influxdb batch\"-node\n// (node-red-contrib-influxdb): measurement + tags + fields + timestamp.\nconst d = msg.payload;\nconst fields = {};\nfor (const [k, v] of Object.entries(d)) {\n    if (typeof v === \"number\") fields[k] = v;\n}\nfor (const [k, v] of Object.entries(d.afgeleid || {})) {\n    if (typeof v === \"number\" || typeof v === \"string\") fields[k] = v;\n}\nconst tags = { station: d.station };\nif (d.eenheid) tags.eenheid = d.eenheid;\n\nmsg.payload = [{\n    measurement: msg.topic.split(\"/\")[1],   // temperatuur, luchtvochtigheid, wind, regen\n    tags: tags,\n    fields: fields,\n    timestamp: new Date(d.ts)\n}];\nreturn msg;\n",
+        "name": "Meting naar InfluxDB",
+        "func": "// Zet een geldige meting (incl. afgeleide waarden) om naar InfluxDB line protocol.\n// measurement = sensor (temperatuur, luchtvochtigheid, wind, regen), tag = station.\n// --- InfluxDB line protocol + HTTP-schrijfverzoek (gegevens uit omgevingsvariabelen) ---\nconst esc = x => String(x).replace(/[,= ]/g, m => \"\\\\\" + m);\nconst veldwaarde = v => typeof v === \"number\"\n    ? String(v) : '\"' + String(v).replace(/[\"\\\\]/g, m => \"\\\\\" + m) + '\"';\nfunction lijn(measurement, tags, fields, ms) {\n    const t = Object.entries(tags).map(([k, v]) => `,${esc(k)}=${esc(v)}`).join(\"\");\n    const f = Object.entries(fields).map(([k, v]) => `${esc(k)}=${veldwaarde(v)}`).join(\",\");\n    return `${esc(measurement)}${t} ${f} ${ms}`;\n}\nfunction schrijfverzoek(msg, body) {\n    msg.payload = body;\n    msg.method = \"POST\";\n    msg.url = env.get(\"INFLUXDB_URL\") + \"/api/v2/write?org=\" + encodeURIComponent(env.get(\"INFLUXDB_ORG\")) +\n              \"&bucket=\" + encodeURIComponent(env.get(\"INFLUXDB_BUCKET\")) + \"&precision=ms\";\n    msg.headers = { \"Authorization\": \"Token \" + env.get(\"INFLUXDB_TOKEN\"),\n                    \"Content-Type\": \"text/plain; charset=utf-8\" };\n    return msg;\n}\n\nconst d = msg.payload;\nconst fields = {};\nfor (const [k, v] of Object.entries(d)) {\n    if (typeof v === \"number\") fields[k] = v;\n}\nfor (const [k, v] of Object.entries(d.afgeleid || {})) {\n    if (typeof v === \"number\" || typeof v === \"string\") fields[k] = v;\n}\nconst measurement = msg.topic.split(\"/\")[1];\nreturn schrijfverzoek(msg, lijn(measurement, { station: d.station }, fields, Date.parse(d.ts)));\n",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -261,26 +261,9 @@
         "y": 200,
         "wires": [
             [
-                "w_dbg_influx_ok"
+                "w_http_influx"
             ]
         ]
-    },
-    {
-        "id": "w_dbg_influx_ok",
-        "type": "debug",
-        "z": "219341f41a30297e",
-        "name": "naar InfluxDB (metingen)",
-        "active": false,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "payload",
-        "targetType": "msg",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 1300,
-        "y": 200,
-        "wires": []
     },
     {
         "id": "w_mqtt_fout",
@@ -321,37 +304,79 @@
         "id": "w_influx_fout",
         "type": "function",
         "z": "219341f41a30297e",
-        "name": "Fout naar InfluxDB-formaat",
-        "func": "// Zet een afgewezen meting om naar measurement \"fouten\" voor InfluxDB.\n// Zo kan je in het dashboard het aantal fouten per sensor en per reden tonen.\nconst f = msg.payload;\nconst tijd = isNaN(Date.parse(f.ts)) ? new Date() : new Date(f.ts);\nmsg.payload = [{\n    measurement: \"fouten\",\n    tags: { station: f.station, sensor: f.bron_topic.split(\"/\")[1], reden: f.reden },\n    fields: { aantal: 1, veld: f.veld || \"\", waarde: JSON.stringify(f.waarde) },\n    timestamp: tijd\n}];\n\n// Tellers per reden, zichtbaar onder de node\nconst tel = context.get(\"tel\") || {};\ntel[f.reden] = (tel[f.reden] || 0) + 1;\ncontext.set(\"tel\", tel);\nnode.status({ fill: \"yellow\", shape: \"ring\",\n              text: Object.entries(tel).map(([r, n]) => `${r}: ${n}`).join(\" | \") });\nreturn msg;\n",
+        "name": "Fout naar InfluxDB",
+        "func": "// Zet een afgewezen meting om naar measurement \"fouten\" (tags: station, sensor, reden),\n// zodat het dashboard het aantal fouten per sensor en per reden kan tonen.\n// --- InfluxDB line protocol + HTTP-schrijfverzoek (gegevens uit omgevingsvariabelen) ---\nconst esc = x => String(x).replace(/[,= ]/g, m => \"\\\\\" + m);\nconst veldwaarde = v => typeof v === \"number\"\n    ? String(v) : '\"' + String(v).replace(/[\"\\\\]/g, m => \"\\\\\" + m) + '\"';\nfunction lijn(measurement, tags, fields, ms) {\n    const t = Object.entries(tags).map(([k, v]) => `,${esc(k)}=${esc(v)}`).join(\"\");\n    const f = Object.entries(fields).map(([k, v]) => `${esc(k)}=${veldwaarde(v)}`).join(\",\");\n    return `${esc(measurement)}${t} ${f} ${ms}`;\n}\nfunction schrijfverzoek(msg, body) {\n    msg.payload = body;\n    msg.method = \"POST\";\n    msg.url = env.get(\"INFLUXDB_URL\") + \"/api/v2/write?org=\" + encodeURIComponent(env.get(\"INFLUXDB_ORG\")) +\n              \"&bucket=\" + encodeURIComponent(env.get(\"INFLUXDB_BUCKET\")) + \"&precision=ms\";\n    msg.headers = { \"Authorization\": \"Token \" + env.get(\"INFLUXDB_TOKEN\"),\n                    \"Content-Type\": \"text/plain; charset=utf-8\" };\n    return msg;\n}\n\nconst f = msg.payload;\nconst ms = isNaN(Date.parse(f.ts)) ? Date.now() : Date.parse(f.ts);\n\n// Tellers per reden, zichtbaar onder de node\nconst tel = context.get(\"tel\") || {};\ntel[f.reden] = (tel[f.reden] || 0) + 1;\ncontext.set(\"tel\", tel);\nnode.status({ fill: \"yellow\", shape: \"ring\",\n              text: Object.entries(tel).map(([r, n]) => `${r}: ${n}`).join(\" | \") });\n\nconst tags = { station: f.station, sensor: f.bron_topic.split(\"/\")[1], reden: f.reden };\nconst fields = { aantal: 1, veld: f.veld || \"-\", waarde: JSON.stringify(f.waarde) };\nreturn schrijfverzoek(msg, lijn(\"fouten\", tags, fields, ms));\n",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 840,
+        "x": 830,
         "y": 340,
         "wires": [
             [
-                "w_dbg_influx_fout"
+                "w_http_influx"
             ]
         ]
     },
     {
-        "id": "w_dbg_influx_fout",
-        "type": "debug",
+        "id": "w_http_influx",
+        "type": "http request",
         "z": "219341f41a30297e",
-        "name": "naar InfluxDB (fouten)",
-        "active": false,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "payload",
-        "targetType": "msg",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 1100,
-        "y": 340,
-        "wires": []
+        "name": "schrijf naar InfluxDB",
+        "method": "use",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": true,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 1310,
+        "y": 260,
+        "wires": [
+            [
+                "w_influx_controle"
+            ]
+        ]
+    },
+    {
+        "id": "w_catch_influx",
+        "type": "catch",
+        "z": "219341f41a30297e",
+        "name": "fout bij schrijven",
+        "scope": [
+            "w_http_influx"
+        ],
+        "uncaught": false,
+        "x": 1310,
+        "y": 320,
+        "wires": [
+            [
+                "w_influx_controle"
+            ]
+        ]
+    },
+    {
+        "id": "w_influx_controle",
+        "type": "function",
+        "z": "219341f41a30297e",
+        "name": "Controleer schrijfactie",
+        "func": "// Controleert het antwoord van InfluxDB (204 = gelukt) en toont een teller.\nconst tel = context.get(\"tel\") || { ok: 0, fout: 0 };\nif (msg.statusCode === 204) {\n    tel.ok++;\n} else {\n    tel.fout++;\n    const reden = msg.error ? (msg.error.message || msg.error) : `HTTP ${msg.statusCode}: ${msg.payload}`;\n    node.warn(\"Schrijven naar InfluxDB mislukt: \" + reden);\n}\ncontext.set(\"tel\", tel);\nnode.status({ fill: tel.fout ? \"red\" : \"green\", shape: \"dot\",\n              text: `geschreven ${tel.ok} | mislukt ${tel.fout}` });\nreturn null;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1530,
+        "y": 280,
+        "wires": [
+            []
+        ]
     }
 ]

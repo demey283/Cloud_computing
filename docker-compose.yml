@@ -20,8 +20,33 @@ services:
       - ./node-red:/data
     environment:
       - TZ=Europe/Brussels
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-vives}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-weerstation}
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:?Zet INFLUXDB_TOKEN in .env (zie .env.example)}
     depends_on:
       - mqtt5
+      - influxdb
+    restart: unless-stopped
+
+  influxdb:
+    image: influxdb:2
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+      - ./influxdb/init:/docker-entrypoint-initdb.d:ro
+      - ./influxdb/templates:/templates:ro
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_ADMIN_USER:-admin}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:?Zet INFLUXDB_ADMIN_PASSWORD in .env (zie .env.example)}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-vives}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-weerstation}
+      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUXDB_RETENTION:-30d}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:?Zet INFLUXDB_TOKEN in .env (zie .env.example)}
     restart: unless-stopped
 
   weerstation:
@@ -42,3 +67,7 @@ services:
 networks:
   default:
     name: mqtt5-network
+
+volumes:
+  influxdb-data:
+  influxdb-config:

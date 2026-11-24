@@ -1,0 +1,718 @@
+[
+  {
+    "apiVersion": "influxdata.com/v2alpha1",
+    "kind": "Dashboard",
+    "metadata": {
+      "name": "weerstation-dashboard"
+    },
+    "spec": {
+      "name": "Weerstation",
+      "description": "Live weerwaarden, gemiddelden over 1 u en 24 u, grafieken en datakwaliteit",
+      "charts": [
+        {
+          "kind": "Markdown",
+          "name": "notitie",
+          "note": "## 🌦️ Weerstation kortrijk-01\n**Live** = laatste meting (≤ 5 min oud) · **Groen** = gemiddelde laatste uur · **Oranje** = gemiddelde laatste 24 uur · Afgewezen metingen onderaan. Zet rechtsboven *auto-refresh* op 5 s voor een live weergave.",
+          "xPos": 0,
+          "yPos": 0,
+          "width": 12,
+          "height": 1
+        },
+        {
+          "kind": "Gauge",
+          "name": "Temperatuur nu",
+          "xPos": 0,
+          "yPos": 1,
+          "width": 3,
+          "height": 3,
+          "suffix": " °C",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "id": "min",
+              "name": "min",
+              "type": "min",
+              "hex": "#00C9FF",
+              "value": -10
+            },
+            {
+              "id": "t0",
+              "name": "t0",
+              "type": "threshold",
+              "hex": "#4ED8A0",
+              "value": 5
+            },
+            {
+              "id": "t1",
+              "name": "t1",
+              "type": "threshold",
+              "hex": "#FFD255",
+              "value": 20
+            },
+            {
+              "id": "t2",
+              "name": "t2",
+              "type": "threshold",
+              "hex": "#DC4E58",
+              "value": 28
+            },
+            {
+              "id": "max",
+              "name": "max",
+              "type": "max",
+              "hex": "#DC4E58",
+              "value": 40
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r._measurement == \"temperatuur\" and r._field == \"waarde\")\n  |> last()"
+            }
+          ]
+        },
+        {
+          "kind": "Gauge",
+          "name": "Luchtvochtigheid nu",
+          "xPos": 3,
+          "yPos": 1,
+          "width": 3,
+          "height": 3,
+          "suffix": " %",
+          "decimalPlaces": 0,
+          "colors": [
+            {
+              "id": "min",
+              "name": "min",
+              "type": "min",
+              "hex": "#FF7E27",
+              "value": 0
+            },
+            {
+              "id": "t0",
+              "name": "t0",
+              "type": "threshold",
+              "hex": "#4ED8A0",
+              "value": 30
+            },
+            {
+              "id": "t1",
+              "name": "t1",
+              "type": "threshold",
+              "hex": "#00C9FF",
+              "value": 85
+            },
+            {
+              "id": "max",
+              "name": "max",
+              "type": "max",
+              "hex": "#00C9FF",
+              "value": 100
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r._measurement == \"luchtvochtigheid\" and r._field == \"waarde\")\n  |> last()"
+            }
+          ]
+        },
+        {
+          "kind": "Gauge",
+          "name": "Windsnelheid nu",
+          "xPos": 6,
+          "yPos": 1,
+          "width": 3,
+          "height": 3,
+          "suffix": " km/h",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "id": "min",
+              "name": "min",
+              "type": "min",
+              "hex": "#4ED8A0",
+              "value": 0
+            },
+            {
+              "id": "t0",
+              "name": "t0",
+              "type": "threshold",
+              "hex": "#FFD255",
+              "value": 39
+            },
+            {
+              "id": "t1",
+              "name": "t1",
+              "type": "threshold",
+              "hex": "#DC4E58",
+              "value": 60
+            },
+            {
+              "id": "max",
+              "name": "max",
+              "type": "max",
+              "hex": "#DC4E58",
+              "value": 100
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r._measurement == \"wind\" and r._field == \"snelheid\")\n  |> last()"
+            }
+          ]
+        },
+        {
+          "kind": "Table",
+          "name": "Huidige toestand",
+          "xPos": 9,
+          "yPos": 1,
+          "width": 3,
+          "height": 3,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#FFFFFF"
+            }
+          ],
+          "tableOptions": {
+            "verticalTimeAxis": true
+          },
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -5m)\n  |> filter(fn: (r) =>\n      (r._measurement == \"temperatuur\" and (r._field == \"gevoelstemperatuur\" or r._field == \"dauwpunt\")) or\n      (r._measurement == \"wind\" and (r._field == \"windrichting\" or r._field == \"beaufort\" or r._field == \"beaufort_omschrijving\")) or\n      (r._measurement == \"regen\" and r._field == \"intensiteit\"))\n  |> last()\n  |> map(fn: (r) => ({\n      volgorde: if r._field == \"gevoelstemperatuur\" then 1 else if r._field == \"dauwpunt\" then 2\n                else if r._field == \"windrichting\" then 3 else if r._field == \"beaufort\" then 4\n                else if r._field == \"beaufort_omschrijving\" then 5 else 6,\n      Grootheid: if r._field == \"gevoelstemperatuur\" then \"Gevoelstemperatuur\"\n                 else if r._field == \"dauwpunt\" then \"Dauwpunt\"\n                 else if r._field == \"windrichting\" then \"Windrichting\"\n                 else if r._field == \"beaufort\" then \"Windkracht\"\n                 else if r._field == \"beaufort_omschrijving\" then \"Wind\"\n                 else \"Neerslag\",\n      Waarde: if r._field == \"gevoelstemperatuur\" or r._field == \"dauwpunt\" then string(v: r._value) + \" °C\"\n              else if r._field == \"beaufort\" then string(v: r._value) + \" Bft\"\n              else string(v: r._value)\n  }))\n  |> group()\n  |> sort(columns: [\"volgorde\"])\n  |> drop(columns: [\"volgorde\"])"
+            }
+          ]
+        },
+        {
+          "kind": "Single_Stat",
+          "name": "Regen nu",
+          "xPos": 0,
+          "yPos": 4,
+          "width": 3,
+          "height": 2,
+          "suffix": " mm/u",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#4ED8A0"
+            },
+            {
+              "id": "t0",
+              "name": "t0",
+              "type": "text",
+              "hex": "#00C9FF",
+              "value": 0.1
+            },
+            {
+              "id": "t1",
+              "name": "t1",
+              "type": "text",
+              "hex": "#DC4E58",
+              "value": 7.6
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r._measurement == \"regen\" and r._field == \"mm_per_uur\")\n  |> last()"
+            }
+          ]
+        },
+        {
+          "kind": "Single_Stat",
+          "name": "Gem. temperatuur · 1 u",
+          "xPos": 3,
+          "yPos": 4,
+          "width": 3,
+          "height": 2,
+          "suffix": " °C",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#4ED8A0"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"temperatuur\" and r._field == \"waarde\")\n  |> mean()"
+            }
+          ]
+        },
+        {
+          "kind": "Single_Stat",
+          "name": "Gem. luchtvochtigheid · 1 u",
+          "xPos": 6,
+          "yPos": 4,
+          "width": 3,
+          "height": 2,
+          "suffix": " %",
+          "decimalPlaces": 0,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#4ED8A0"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"luchtvochtigheid\" and r._field == \"waarde\")\n  |> mean()"
+            }
+          ]
+        },
+        {
+          "kind": "Single_Stat",
+          "name": "Gem. wind · 1 u",
+          "xPos": 9,
+          "yPos": 4,
+          "width": 3,
+          "height": 2,
+          "suffix": " km/h",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#4ED8A0"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"wind\" and r._field == \"snelheid\")\n  |> mean()"
+            }
+          ]
+        },
+        {
+          "kind": "Single_Stat",
+          "name": "Gem. regen · 1 u",
+          "xPos": 0,
+          "yPos": 6,
+          "width": 3,
+          "height": 2,
+          "suffix": " mm/u",
+          "decimalPlaces": 2,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#4ED8A0"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"regen\" and r._field == \"mm_per_uur\")\n  |> mean()"
+            }
+          ]
+        },
+        {
+          "kind": "Single_Stat",
+          "name": "Gem. temperatuur · 24 u",
+          "xPos": 3,
+          "yPos": 6,
+          "width": 3,
+          "height": 2,
+          "suffix": " °C",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#FF7E27"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -24h)\n  |> filter(fn: (r) => r._measurement == \"temperatuur\" and r._field == \"waarde\")\n  |> mean()"
+            }
+          ]
+        },
+        {
+          "kind": "Single_Stat",
+          "name": "Gem. luchtvochtigheid · 24 u",
+          "xPos": 6,
+          "yPos": 6,
+          "width": 3,
+          "height": 2,
+          "suffix": " %",
+          "decimalPlaces": 0,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#FF7E27"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -24h)\n  |> filter(fn: (r) => r._measurement == \"luchtvochtigheid\" and r._field == \"waarde\")\n  |> mean()"
+            }
+          ]
+        },
+        {
+          "kind": "Single_Stat",
+          "name": "Gem. wind · 24 u",
+          "xPos": 9,
+          "yPos": 6,
+          "width": 3,
+          "height": 2,
+          "suffix": " km/h",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#FF7E27"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -24h)\n  |> filter(fn: (r) => r._measurement == \"wind\" and r._field == \"snelheid\")\n  |> mean()"
+            }
+          ]
+        },
+        {
+          "kind": "Xy",
+          "name": "Temperatuur, gevoelstemperatuur en dauwpunt",
+          "xPos": 0,
+          "yPos": 8,
+          "width": 6,
+          "height": 4,
+          "geom": "monotoneX",
+          "position": "overlaid",
+          "xCol": "_time",
+          "yCol": "_value",
+          "shade": true,
+          "legendOpacity": 1,
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "base": "10",
+              "scale": "linear",
+              "label": "°C"
+            }
+          ],
+          "colors": [
+            {
+              "id": "a",
+              "name": "a",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "c",
+              "name": "c",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"temperatuur\" and (r._field == \"waarde\" or r._field == \"gevoelstemperatuur\" or r._field == \"dauwpunt\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+            }
+          ]
+        },
+        {
+          "kind": "Xy",
+          "name": "Luchtvochtigheid",
+          "xPos": 6,
+          "yPos": 8,
+          "width": 6,
+          "height": 4,
+          "geom": "monotoneX",
+          "position": "overlaid",
+          "xCol": "_time",
+          "yCol": "_value",
+          "shade": true,
+          "legendOpacity": 1,
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "base": "10",
+              "scale": "linear",
+              "label": "%"
+            }
+          ],
+          "colors": [
+            {
+              "id": "a",
+              "name": "a",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "c",
+              "name": "c",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"luchtvochtigheid\" and (r._field == \"waarde\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+            }
+          ]
+        },
+        {
+          "kind": "Xy",
+          "name": "Windsnelheid",
+          "xPos": 0,
+          "yPos": 12,
+          "width": 6,
+          "height": 4,
+          "geom": "monotoneX",
+          "position": "overlaid",
+          "xCol": "_time",
+          "yCol": "_value",
+          "shade": true,
+          "legendOpacity": 1,
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "base": "10",
+              "scale": "linear",
+              "label": "km/h"
+            }
+          ],
+          "colors": [
+            {
+              "id": "a",
+              "name": "a",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "c",
+              "name": "c",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wind\" and (r._field == \"snelheid\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+            }
+          ]
+        },
+        {
+          "kind": "Xy",
+          "name": "Neerslag",
+          "xPos": 6,
+          "yPos": 12,
+          "width": 6,
+          "height": 4,
+          "geom": "step",
+          "position": "overlaid",
+          "xCol": "_time",
+          "yCol": "_value",
+          "shade": true,
+          "legendOpacity": 1,
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "base": "10",
+              "scale": "linear",
+              "label": "mm/u"
+            }
+          ],
+          "colors": [
+            {
+              "id": "a",
+              "name": "a",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "c",
+              "name": "c",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"regen\" and (r._field == \"mm_per_uur\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)"
+            }
+          ]
+        },
+        {
+          "kind": "Markdown",
+          "name": "notitie",
+          "note": "### 🧹 Datakwaliteit\nMetingen die Node-RED afwees (ontbrekend veld, verkeerd type, buiten bereik of onrealistische sprong). Zie ook MQTT-topic `weer/fouten`.",
+          "xPos": 0,
+          "yPos": 16,
+          "width": 12,
+          "height": 1
+        },
+        {
+          "kind": "Single_Stat",
+          "name": "Afgewezen · laatste uur",
+          "xPos": 0,
+          "yPos": 17,
+          "width": 3,
+          "height": 4,
+          "suffix": " %",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#4ED8A0"
+            },
+            {
+              "id": "t0",
+              "name": "t0",
+              "type": "text",
+              "hex": "#FFD255",
+              "value": 10
+            },
+            {
+              "id": "t1",
+              "name": "t1",
+              "type": "text",
+              "hex": "#DC4E58",
+              "value": 25
+            }
+          ],
+          "queries": [
+            {
+              "query": "fout = from(bucket: \"weerstation\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"fouten\" and r._field == \"aantal\")\n  |> group() |> count() |> set(key: \"soort\", value: \"fout\")\nok = from(bucket: \"weerstation\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => (r._measurement == \"temperatuur\" and r._field == \"waarde\") or (r._measurement == \"luchtvochtigheid\" and r._field == \"waarde\") or (r._measurement == \"wind\" and r._field == \"snelheid\") or (r._measurement == \"regen\" and r._field == \"mm_per_uur\"))\n  |> group() |> count() |> set(key: \"soort\", value: \"ok\")\nunion(tables: [fout, ok])\n  |> group()\n  |> pivot(rowKey: [\"_start\"], columnKey: [\"soort\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._start, _value: 100.0 * float(v: r.fout) / float(v: r.fout + r.ok)}))"
+            }
+          ]
+        },
+        {
+          "kind": "Xy",
+          "name": "Afgewezen metingen per minuut (per reden)",
+          "xPos": 3,
+          "yPos": 17,
+          "width": 5,
+          "height": 4,
+          "geom": "step",
+          "position": "overlaid",
+          "xCol": "_time",
+          "yCol": "_value",
+          "shade": true,
+          "legendOpacity": 1,
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "base": "10",
+              "scale": "linear",
+              "label": "aantal"
+            }
+          ],
+          "colors": [
+            {
+              "id": "a",
+              "name": "a",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "c",
+              "name": "c",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"fouten\" and r._field == \"aantal\")\n  |> group(columns: [\"reden\"])\n  |> aggregateWindow(every: 1m, fn: sum, createEmpty: false)"
+            }
+          ]
+        },
+        {
+          "kind": "Table",
+          "name": "Afgewezen per sensor en reden · 24 u",
+          "xPos": 8,
+          "yPos": 17,
+          "width": 4,
+          "height": 4,
+          "colors": [
+            {
+              "id": "base",
+              "name": "basis",
+              "type": "text",
+              "hex": "#FFFFFF"
+            }
+          ],
+          "tableOptions": {
+            "verticalTimeAxis": true
+          },
+          "queries": [
+            {
+              "query": "from(bucket: \"weerstation\")\n  |> range(start: -24h)\n  |> filter(fn: (r) => r._measurement == \"fouten\" and r._field == \"aantal\")\n  |> group(columns: [\"sensor\", \"reden\"])\n  |> sum()\n  |> group()\n  |> keep(columns: [\"sensor\", \"reden\", \"_value\"])\n  |> rename(columns: {sensor: \"Sensor\", reden: \"Reden\", _value: \"Aantal\"})\n  |> sort(columns: [\"Aantal\"], desc: true)"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
